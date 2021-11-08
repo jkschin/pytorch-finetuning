@@ -16,10 +16,20 @@ import matplotlib.pyplot as plt
 import time
 import copy
 import customdataset as CD
+import os
 from collections import Counter
 
+LAPTOP = "LAPTOP"
+MITSC = "MITSC"
+
+if os.getenv("HOME") == "/Users/samuelchin":
+    ENV = LAPTOP
+else:
+    ENV = MITSC
+
 image_size = (224, 224, 3)
-output_dir = "./"
+# output_dir = "./results_all_tune_weighted"
+output_dir = "./temp"
 
 def to_img(x):
     x = torch.argmax(x, dim=1)
@@ -57,8 +67,12 @@ def to_img(x):
 
 # data_dir = 'data/hymenoptera_data'
 img_transform = transforms.Compose([transforms.ToTensor()])
-batch_size = 2
-ROOT_DIR="/Users/samuelchin/Desktop/MIT/Thesis/held-karp/"
+if ENV == LAPTOP:
+    ROOT_DIR="/Users/samuelchin/Desktop/MIT/Thesis/held-karp/"
+    batch_size = 2
+else:
+    ROOT_DIR="/home/gridsan/jchin/held-karp"
+    batch_size = 32
 dataset_train = CD.CustomDataset(root_dir=ROOT_DIR, transform=img_transform)
 dataset_eval = CD.CustomDataset(root_dir=ROOT_DIR, transform=img_transform)
 dataloaders = {
@@ -122,10 +136,10 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 # forward
                 # track history if only in train
                 with torch.set_grad_enabled(phase == 'train'):
-                    print(inputs.size())
                     outputs = model(inputs)
-                    _, preds = torch.max(outputs, 1)
+                    # _, preds = torch.max(outputs, 1)
                     loss = criterion(outputs, labels)
+                    # loss = criterion(outputs, outputs)
 
                     # backward + optimize only if in training phase
                     if phase == 'train':
@@ -134,12 +148,13 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
 
                 # statistics
                 running_loss += loss.item() * inputs.size(0)
-                running_corrects += torch.sum(preds == labels.data)
+                # running_corrects += torch.sum(preds == labels.data)
             if phase == 'train':
                 scheduler.step()
 
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = running_corrects.double() / dataset_sizes[phase]
+            # epoch_acc = running_corrects.double() / dataset_sizes[phase]
+            epoch_acc = 0
 
             print('{} Loss: {:.4f} Acc: {:.4f}'.format(
                 phase, epoch_loss, epoch_acc))
@@ -149,7 +164,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
 
-        if epoch % 10 == 0:
             print("Image written")
             pic = to_img(outputs.cpu().data)
             save_image(pic, './{}/image_{}.png'.format(output_dir, epoch))
@@ -172,6 +186,7 @@ inputs, classes = next(iter(dataloaders['train']))
 out = torchvision.utils.make_grid(inputs)
 
 # imshow(out, title=[class_names[x] for x in classes])
+# imshow(out)
 
 num_classes = 3
 class MyNet(nn.Module):
@@ -179,10 +194,9 @@ class MyNet(nn.Module):
         super(MyNet, self).__init__()
         self.pretrained = my_pretrained_model
         self.last = nn.Sequential(
-            nn.Conv2d(21, 256, 1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.BatchNorm2d(21),
             nn.ReLU(),
-            nn.Conv2d(256, num_classes, 1))
+            nn.Conv2d(21, num_classes, 1))
         self.first = nn.Sequential(
             nn.Conv2d(3, 256, 1, bias=False),
             nn.BatchNorm2d(256),
@@ -193,26 +207,30 @@ class MyNet(nn.Module):
 
     def forward(self, x):
         # There are two parallel nets in the resnet.
-        x = self.first(x)
         x = self.pretrained(x)["out"]
         x = self.last(x)
         return x
 model_ss = models.segmentation.deeplabv3_resnet101(pretrained=True)
-for param in model_ss.parameters():
-    param.requires_grad = False
+# for name, param in model_ss.named_parameters():
+    # if not "classifier" in name:
+        # param.requires_grad = False
 mynet = MyNet(my_pretrained_model=model_ss)
 # num_ftrs = model_ft.fc.in_features
 # Here the size of each output sample is set to 2.
 # Alternatively, it can be generalized to nn.Linear(num_ftrs, len(class_names)).
 
-model_ss = model_ss.to(device)
+mynet = mynet.to(device)
 
-criterion = nn.CrossEntropyLoss()
+weights = torch.FloatTensor([1, 1, 1]).cuda()
+criterion = nn.CrossEntropyLoss(weight=weights)
 
 # Observe that all parameters are being optimized
-optimizer_ft = optim.SGD(mynet.last.parameters(), lr=0.001, momentum=0.9)
+# params = list(mynet.first.parameters()) + list(mynet.last.parameters())
+# params = list(mynet.pretrained.classifier.parameters()) + list(mynet.last.parameters())
+params = list(mynet.parameters())
+optimizer_ft = optim.SGD(params, lr=0.001, momentum=0.9)
 
 # Decay LR by a factor of 0.1 every 7 epochs
 exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=7, gamma=0.1)
 mynet = train_model(mynet, criterion, optimizer_ft, exp_lr_scheduler,
-                       num_epochs=25)
+                       num_epochs=10000)
