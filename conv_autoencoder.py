@@ -11,8 +11,8 @@ import os
 from collections import Counter
 import numpy as np
 
-output_dir = "20211108-Expt1"
-image_size = (128, 128)
+output_dir = "20211222-Expt8-512-boosted-1150"
+image_size = (512, 512)
 if not os.path.exists('./%s' %output_dir):
     os.mkdir('./%s' %output_dir)
 
@@ -45,12 +45,13 @@ def to_img(x):
     return x
 
 
-num_epochs = 10000
+num_epochs = 1000
 if torch.cuda.is_available():
-    batch_size = 128
+    batch_size = 16
 else:
     batch_size = 1
 learning_rate = 1e-3
+print(batch_size)
 
 img_transform = transforms.Compose([
     transforms.ToTensor(),
@@ -66,9 +67,9 @@ class CustomDataset(Dataset):
 
     def __len__(self):
         if torch.cuda.is_available():
-            return 100
+            return 10000
         else:
-            return 3000
+            return 100
 
     def transform_img(self, img, colors, classes):
         new_img = np.zeros(img.shape[0:2])
@@ -91,7 +92,7 @@ class CustomDataset(Dataset):
         return img
 
     def __getitem__(self, idx):
-        inp_name = os.path.join(self.root_dir, "inputs_thick_128", "input_%05d.png" %idx)
+        inp_name = os.path.join(self.root_dir, "512x512/20/train/input", "input_%05d.png" %idx)
         inp = cv2.imread(inp_name)
         inp = self.transform_inp(inp)
         inp = torch.as_tensor(inp, dtype=torch.int64)
@@ -101,7 +102,7 @@ class CustomDataset(Dataset):
         inp = torch.squeeze(inp)
         inp = inp.type(torch.FloatTensor)
 
-        out_name = os.path.join(self.root_dir, "outputs_thick_128", "output_%05d.png" %idx)
+        out_name = os.path.join(self.root_dir, "512x512/20/train/output", "output_%05d.png" %idx)
         out = cv2.imread(out_name)
         out = self.transform_out(out)
         out = torch.as_tensor(out, dtype=torch.int64)
@@ -210,6 +211,7 @@ class autoencoder(nn.Module):
         x = self.block3T(x)
         x = self.block2T(x)
         x = self.block1T(x)
+        print(x2.shape)
         x = torch.cat([x2, x3, x4, x, x_orig[:, 1:2, :, :]], 1)
         x = self.last(x)
         return x
@@ -249,7 +251,7 @@ class MyNet(nn.Module):
             nn.Upsample(size=image_size, mode="bilinear"),
         )
         self.last = nn.Sequential(
-            nn.Conv2d(129, 3, 1, stride=1),
+            nn.Conv2d(130, 3, 1, stride=1),
         )
 
     def forward(self, x):
@@ -268,7 +270,7 @@ class MyNet(nn.Module):
         u2 = self.u2(outputs[-2])
         u3 = self.u3(outputs[-3])
         u4 = self.u4(outputs[-4])
-        x = torch.cat([u1, u2, u3, u4, x_orig[:, 1:2, :, :]], 1)
+        x = torch.cat([u1, u2, u3, u4, x_orig[:, 1:, :, :]], 1)
         x = self.last(x)
         # a = self.u1(x)
         # b = self.u2(x)
@@ -276,49 +278,50 @@ class MyNet(nn.Module):
         # x = self.last(x)
         return x
 
-model_ss = models.densenet161(pretrained=True)
-# for name, param in model_ss.named_parameters():
-# if not "classifier" in name:
-# param.requires_grad = False
-mynet = MyNet(my_pretrained_model=model_ss)
-model = mynet.to(device)
-from torchinfo import summary
-summary(model, input_size=(batch_size, 3, 128, 128))
-def init_weights(m):
-    if isinstance(m, nn.Conv2d):
-        torch.nn.init.kaiming_uniform
-model.apply(init_weights)
-weights = torch.FloatTensor([1, 1, 2])
-weights = weights.to(device)
-criterion = nn.CrossEntropyLoss(weight=weights)
-# criterion = nn.NLLLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
-                             weight_decay=1e-5)
-# optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-for epoch in range(num_epochs):
-    print("Epoch: %d" %epoch)
-    total_loss = 0
-    for data in dataloader:
-        print("Loaded Batch")
-        inp, out = data
-        if torch.cuda.is_available():
-            inp, out = inp.cuda(), out.cuda()
-        # ===================forward=====================
-        # print(inp.dtype)
-        # print(inp.shape)
-        output = model(inp)
-        loss = criterion(output, out)
-        # ===================backward====================
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-    # ===================log========================
-    total_loss += loss.data
-    print('epoch [{}/{}], loss:{:.4f}'
-          .format(epoch+1, num_epochs, total_loss))
-    if epoch % 10 == 0:
+if __name__ == "__main__":
+    model_ss = models.densenet161(pretrained=True)
+    # for name, param in model_ss.named_parameters():
+    # if not "classifier" in name:
+    # param.requires_grad = False
+    mynet = MyNet(my_pretrained_model=model_ss)
+    model = mynet.to(device)
+    from torchinfo import summary
+    summary(model, input_size=(batch_size, 3, image_size[0], image_size[1]))
+    def init_weights(m):
+        if isinstance(m, nn.Conv2d):
+            torch.nn.init.kaiming_uniform
+    model.apply(init_weights)
+    weights = torch.FloatTensor([1, 1, 4])
+    weights = weights.to(device)
+    criterion = nn.CrossEntropyLoss(weight=weights)
+    # criterion = nn.NLLLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,
+                                weight_decay=1e-5)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    for epoch in range(num_epochs):
+        print("Epoch: %d" %epoch)
+        total_loss = 0
+        for data in dataloader:
+            print("Loaded Batch")
+            inp, out = data
+            if torch.cuda.is_available():
+                inp, out = inp.cuda(), out.cuda()
+            # ===================forward=====================
+            # print(inp.dtype)
+            # print(inp.shape)
+            output = model(inp)
+            loss = criterion(output, out)
+            # ===================backward====================
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        # ===================log========================
+        total_loss += loss.data
+        print('epoch [{}/{}], loss:{:.4f}'
+            .format(epoch+1, num_epochs, total_loss))
+        # if epoch % 10 == 0:
         print("Image written")
         pic = to_img(output.cpu().data)
         save_image(pic, './{}/image_{}.png'.format(output_dir, epoch))
+        torch.save(model.state_dict(), './conv_autoencoder_expt8.pth')
 
-torch.save(model.state_dict(), './conv_autoencoder.pth')
